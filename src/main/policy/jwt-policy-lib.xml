@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<policy xmlns="http://www.mulesoft.org/schema/mule/policy"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xmlns:spring="http://www.springframework.org/schema/beans"
+        xmlns:scripting="http://www.mulesoft.org/schema/mule/scripting"
+        xmlns:mule="http://www.mulesoft.org/schema/mule/core"
+        xmlns:mule-ss="http://www.mulesoft.org/schema/mule/spring-security"
+        xmlns:ss="http://www.springframework.org/schema/security"
+        xmlns:api-platform-gw="http://www.mulesoft.org/schema/mule/api-platform-gw"
+        xsi:schemaLocation="http://www.mulesoft.org/schema/mule/policy http://www.mulesoft.org/schema/mule/policy/current/mule-policy.xsd
+              http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+              http://www.mulesoft.org/schema/mule/scripting http://www.mulesoft.org/schema/mule/scripting/current/mule-scripting.xsd
+              http://www.mulesoft.org/schema/mule/spring-security http://www.mulesoft.org/schema/mule/spring-security/current/mule-spring-security.xsd
+              http://www.springframework.org/schema/security http://www.springframework.org/schema/security/spring-security-current.xsd
+              http://www.mulesoft.org/schema/mule/api-platform-gw http://www.mulesoft.org/schema/mule/api-platform-gw/current/mule-api-platform-gw.xsd
+              http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd">
+    
+    <!-- Response message in case of rejecting a message -->
+	<mule:processor-chain name="policyViolation">
+		<mule:logger message="Policy {{ policyId }} filtered the message #[message.getId()] based on JWS validation" level="INFO" />	  
+		<mule:set-property propertyName="http.status" value="401"/>    
+		<mule:set-property propertyName="Content-Type" value="application/json"/>
+		<mule:set-payload value='{ "error" : "Policy {{ policyId }}: JWE token is not valid"}'/>
+	</mule:processor-chain>
+	
+	<mule:processor-chain name="authorizationHeaderViolation">
+      	<mule:set-property propertyName="http.status" value="401"/>    
+      	<mule:set-property propertyName="Content-Type" value="application/json"/>
+      	<mule:set-payload value='{ "error" : "Policy {{ policyId }}: The message does not contain the Authorization header"}'/>
+    </mule:processor-chain>
+
+	<mule:processor-chain name="authFormatViolation">
+	  	<mule:set-property propertyName="http.status" value="401"/>    
+	  	<mule:set-property propertyName="Content-Type" value="application/json"/>
+	  	<mule:set-payload value='{ "error" : "Policy {{ policyId }}: The Authorization header has invalid format"}'/>
+	</mule:processor-chain>
+    
+    
+    <pointcut>
+        <api-platform-gw:api-pointcut apiName="{{ apiName }}" apiVersion="{{ apiVersionName }}"/>
+    </pointcut>
+   
+   
+    <before>
+        <mule:logger level="DEBUG" message="Policy {{ policyId }} applied JWS check."/> 
+        <!--    Save input for later use   -->     
+    	<mule:set-variable variableName="inputPayload" value="#[payload]" />
+    	
+    	
+		<!--    Check presence of Authorization header    -->
+    	<mule:message-filter onUnaccepted="authorizationHeaderViolation">
+			<mule:expression-filter expression="#[message.inboundProperties.Authorization != null]" name="AuthorizationHeaderFilter"/>
+		</mule:message-filter>
+	
+        <mule:logger message="Policy {{ policyId }} checking that Authorization header starts with 'Bearer '" level="INFO" />	
+		
+		<!-- continue only if the Authorization header value has a valid format -->	
+		<mule:message-filter onUnaccepted="authFormatViolation">
+			<mule:and-filter>
+				<mule:expression-filter expression="#[message.inboundProperties.Authorization.startsWith('Bearer ')]"/>
+				<mule:expression-filter expression="#[message.inboundProperties.Authorization.split('\\.').length == 5]"/>
+			</mule:and-filter>
+		</mule:message-filter>
+		
+		<mule:set-variable variableName="accessToken" value="#[message.inboundProperties.Authorization.substring(7)]"/>
+		<mule:logger message="Policy {{ policyId }} access_token: #[flowVars.accessToken]" level="INFO" />	
+		
+			<scripting:transformer>
+			<scripting:script engine="Groovy"><![CDATA[
+			import org.jose4j.jwa.AlgorithmConstraints;
+			import org.jose4j.jwa.AlgorithmConstraints.ConstraintType;
+			import org.jose4j.jwk.*;
+			import org.jose4j.jws.*;
+			import org.jose4j.jwt.*;
+			import org.jose4j.jwt.consumer.*;
+			import org.jose4j.keys.resolvers.HttpsJwksVerificationKeyResolver;
+			import org.jose4j.lang.JoseException;
+			
+			JwtClaims jwtClaims = null;
+			try {
+			
+				HttpsJwksVerificationKeyResolver verificationKeys = new HttpsJwksVerificationKeyResolver( new HttpsJwks( "{{jwks}}" ) );
+				
+				String jwkJson = String.format("{\"kty\": \"oct\", \"k\": \"%s\"}", "{{encryptionKey}}" );
+				OctetSequenceJsonWebKey symmetricKey = (OctetSequenceJsonWebKey) JsonWebKey.Factory.newJwk(jwkJson)
+			
+				JwtConsumer jwtConsumer = new JwtConsumerBuilder()
+					.setRequireExpirationTime()
+					.setJwsAlgorithmConstraints(new AlgorithmConstraints(ConstraintType.WHITELIST, "{{signatureAlg}}" ))
+					.setJweAlgorithmConstraints(new AlgorithmConstraints(ConstraintType.WHITELIST, "dir"))
+					.setMaxFutureValidityInMinutes(30*24*60) // 30 days
+					.setAllowedClockSkewInSeconds(0)
+					.setRequireSubject()
+					.setSkipDefaultAudienceValidation()
+					.setExpectedIssuer( "{{issuer}}" )
+					.setVerificationKeyResolver( verificationKeys )
+					.setDecryptionKey(symmetricKey.getKey())
+					.build();
+			
+				jwtClaims = jwtConsumer.processToClaims( flowVars.accessToken );
+				flowVars.verified = true;
+			
+			} catch (Exception e){
+				org.apache.logging.log4j.LogManager.getLogger(org.mule.api.processor.LoggerMessageProcessor.class).info("Policy {{ policyId }}: JWS access_token could not be verified: " + e);				
+				verified = false;
+			}
+			
+			payload = jwtClaims;
+			]]></scripting:script>
+		</scripting:transformer>
+		
+		<mule:logger message="Policy {{ policyId }} claims: #[payload]" level="INFO" />	
+		<mule:set-variable variableName="claims" value="#[payload]" />
+		
+		<mule:message-filter onUnaccepted="policyViolation">
+			<mule:expression-filter expression="#[flowVars.verified]" name="verificationFilter"/>
+		</mule:message-filter>
+		
+		<mule:remove-variable variableName="accessToken" />
+		<mule:remove-variable variableName="inputPayload" />
+		<mule:set-payload value="#[flowVars.inputPayload]" />
+
+    </before>
+    
+</policy>

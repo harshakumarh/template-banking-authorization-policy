@@ -1,7 +1,10 @@
 ## Oauth 2.0 JWE access token enforcement policy
 
-This policy enforces use of signed and encrypted JWT access token within Authorization header in order to access the API on which the policy is applied. The policy decrypts the JWE using shared AES key, then validates signature by using provided URL with RSA JWK key set and finally verifies JWT claims: iss, exp, nbf. The JWK Set is cached for period of 10 minutes to prevent delays.
+This policy enforces use of signed and encrypted JWT access token within Authorization header in order to access the API on which the policy is applied. The policy decrypts the JWE using shared AES key, then validates signature by using provided URL with RSA JWK key set and finally verifies JWT claims: iss, exp, nbf.
 If any of this fails, the policy rejects access to the API and returns 401 Unauthorized status code.
+The policy depends on jose4j library (org.bitbucket.b_c:jose4j:0.5.2). This is not part of Mule runtime so it cannot be applied to API running on CloudHub. It can be used on Mule Standalone by adding the jose4j JAR to the user libs folder.
+
+
 
 ###Supported encryption algorithms:
  + AES_128/GCM/NoPadding  (A128GCM in JWT terminology)
