@@ -1,0 +1,384 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<policy xmlns="http://www.mulesoft.org/schema/mule/policy"
+		xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+		xmlns:http="http://www.mulesoft.org/schema/mule/http" 
+		xmlns:json="http://www.mulesoft.org/schema/mule/json"
+		xmlns:scripting="http://www.mulesoft.org/schema/mule/scripting"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xmlns:spring="http://www.springframework.org/schema/beans"
+        xmlns:mule="http://www.mulesoft.org/schema/mule/core"
+        xmlns:mule-ss="http://www.mulesoft.org/schema/mule/spring-security"
+        xmlns:ss="http://www.springframework.org/schema/security"
+        xmlns:api-platform-gw="http://www.mulesoft.org/schema/mule/api-platform-gw"
+        xsi:schemaLocation="http://www.mulesoft.org/schema/mule/policy http://www.mulesoft.org/schema/mule/policy/current/mule-policy.xsd
+              http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+              http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+              http://www.mulesoft.org/schema/mule/json http://www.mulesoft.org/schema/mule/json/current/mule-json.xsd
+              http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+              http://www.mulesoft.org/schema/mule/scripting http://www.mulesoft.org/schema/mule/scripting/current/mule-scripting.xsd
+              http://www.mulesoft.org/schema/mule/spring-security http://www.mulesoft.org/schema/mule/spring-security/current/mule-spring-security.xsd
+              http://www.springframework.org/schema/security http://www.springframework.org/schema/security/spring-security-current.xsd
+              http://www.mulesoft.org/schema/mule/api-platform-gw http://www.mulesoft.org/schema/mule/api-platform-gw/current/mule-api-platform-gw.xsd
+              http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd">
+    
+	
+	<ee:object-store-caching-strategy name="jwksCachingStrategy">
+        <mule:in-memory-store name="inMemoryStore" maxEntries="-1" entryTTL="600000"/>
+    </ee:object-store-caching-strategy>
+    
+     <http:request-config name="HTTP_AS" protocol="HTTPS" 
+     host="#[new java.net.URL('{{jwks}}').getHost()]" 
+     port="#[(new java.net.URL('{{jwks}}').getPort() == -1) ? new java.net.URL('{{jwks}}').getDefaultPort() : new java.net.URL('{{jwks}}').getPort() ]" 
+     basePath="#[java.nio.file.Paths.get( new java.net.URL('{{jwks}}').getPath() ).getParent().toString().replace('\\', '/')]" />
+     
+
+	<!-- Response messages in case of rejecting the request -->
+	<mule:processor-chain name="policyViolation">
+		<mule:logger message="Policy {{ policyId }} filtered the message #[message.getId()] based on JWS validation" level="INFO" />	  
+		<mule:set-property propertyName="http.status" value="401"/>    
+		<mule:set-property propertyName="Content-Type" value="application/json"/>
+		<mule:set-payload value='{ "error" : "Policy {{ policyId }}: JWE token is not valid"}'/>
+	</mule:processor-chain>
+	
+	<mule:processor-chain name="authorizationHeaderViolation">
+      	<mule:set-property propertyName="http.status" value="401"/>    
+      	<mule:set-property propertyName="Content-Type" value="application/json"/>
+      	<mule:set-payload value='{ "error" : "Policy {{ policyId }}: The message does not contain the Authorization header"}'/>
+    </mule:processor-chain>
+    
+    <mule:processor-chain name="keySetViolation">
+      	<mule:set-property propertyName="http.status" value="401"/>    
+      	<mule:set-property propertyName="Content-Type" value="application/json"/>
+      	<mule:set-payload value='{ "error" : "Policy {{ policyId }}: Could not parse external JWK Key set"}'/>
+    </mule:processor-chain>
+
+	<mule:processor-chain name="authFormatViolation">
+	  	<mule:set-property propertyName="http.status" value="401"/>    
+	  	<mule:set-property propertyName="Content-Type" value="application/json"/>
+	  	<mule:set-payload value='{ "error" : "Policy {{ policyId }}: The Authorization header has invalid format"}'/>
+	</mule:processor-chain>
+
+    <pointcut>
+        <api-platform-gw:api-pointcut apiName="{{ apiName }}" apiVersion="{{ apiVersionName }}"/>
+    </pointcut>
+
+    <before>
+    
+    	<mule:logger level="INFO" message="Policy {{ policyId }} applied JWS check."/> 
+    	
+    	<!--    Request must contain Authorization header    -->
+    	<mule:message-filter onUnaccepted="authorizationHeaderViolation">
+			<mule:expression-filter expression="#[message.inboundProperties.Authorization != null]" name="AuthorizationHeaderFilter"/>
+		</mule:message-filter>
+		
+		<!--   Save input for later use   -->
+        <mule:set-variable variableName="inputPayload" value="#[payload]" />
+        
+        <mule:logger message="Policy {{ policyId }} checking Authorization header validity" level="INFO" />	
+		
+		<!-- Authorization header must have a valid format (Bearer header.key.iv.ciphertext.tag) -->	
+		<mule:message-filter onUnaccepted="authFormatViolation">
+			<mule:and-filter>
+				<mule:expression-filter expression="#[message.inboundProperties.Authorization.startsWith('Bearer ')]"/>
+				<mule:expression-filter expression="#[message.inboundProperties.Authorization.split('\\.').length == 5]"/>
+			</mule:and-filter>
+		</mule:message-filter>
+        
+		<!--    Parse JWE access token   -->      
+        <mule:set-payload value="#[message.inboundProperties.Authorization.substring(7).split('\\.')]" />
+        
+        
+ <!--    JSON Web Encryption PROCESSING   --> 
+        <mule:set-variable variableName="jweHeaderB64" value="#[payload[0]]" />
+        <mule:set-variable variableName="jweKeyB64" value="#[payload[1]]" />
+        <mule:set-variable variableName="jweIVB64" value="#[payload[2]]" />
+		<mule:set-variable variableName="jweEncryptedContentB64" value="#[payload[3]]" />
+		<mule:set-variable variableName="jweAuthTagB64" value="#[payload[4]]" />
+        
+        <!--    Validate Base64 URL-safe encoding of JWE header, payload and signature   --> 	
+		<mule:logger message="Policy {{ policyId }} validating base64url encoding of JWE parts" level="INFO" />	
+		<mule:message-filter onUnaccepted="authFormatViolation">
+			<mule:and-filter>
+				<mule:expression-filter expression="#[ org.apache.commons.codec.binary.Base64.isBase64(flowVars.jweHeaderB64) ]" />
+				<mule:expression-filter expression="#[ flowVars.jweKeyB64 == '' ]" /> <!--  DIR encryption method so key must not be set  -->
+				<mule:expression-filter expression="#[ org.apache.commons.codec.binary.Base64.isBase64(flowVars.jweIVB64) ]" />
+				<mule:expression-filter expression="#[ org.apache.commons.codec.binary.Base64.isBase64(flowVars.jweEncryptedContentB64) ]" />
+				<mule:expression-filter expression="#[ org.apache.commons.codec.binary.Base64.isBase64(flowVars.jweAuthTagB64) ]" />
+			</mule:and-filter>
+		</mule:message-filter>
+        
+        
+        <!--  Decode JWE Header   --> 
+		<mule:set-payload value="#[flowVars.jweHeaderB64]"></mule:set-payload>
+		<mule:base64-decoder-transformer/>
+		<mule:message-filter onUnaccepted="authFormatViolation">
+			<json:is-json-filter/>
+		</mule:message-filter>
+		<json:json-to-object-transformer returnClass="java.util.HashMap" />
+		<mule:set-variable variableName="jweHeader" value="#[payload]" />
+		<mule:logger message="JWE Header: #[flowVars.jweHeader]" level="INFO" />	
+		
+		<!--    Validate JWE header    --> 
+		<mule:set-variable variableName="supportedEncryptionAlgorithms" value="#[
+			[
+				'A128GCM': 'AES_128/GCM/NoPadding',
+				'A256GCM': 'AES_256/GCM/NoPadding'
+			]
+		]"/>
+		
+		<!--  Validate that the header contains correct mandatory fields  --> 
+		<mule:logger message="Policy {{ policyId }} testing JWE header algorithm correctness" level="INFO" />	
+		<mule:message-filter onUnaccepted="policyViolation">
+			<mule:and-filter>
+				<mule:expression-filter expression="#[ flowVars.jweHeader.containsKey('alg') &amp;&amp; flowVars.jweHeader.alg == 'dir' ]" name="correctKeyEncryptionHeaderFilter"/>
+				<mule:expression-filter expression="#[ flowVars.jweHeader.containsKey('enc') &amp;&amp; flowVars.supportedEncryptionAlgorithms.containsKey( flowVars.jweHeader.enc ) ]" name="supportedEncryptionHeaderFilter"/>
+				<mule:expression-filter expression="#[ flowVars.jweHeader.enc == '{{ encryptionAlg }}' ]" name="correctEncryptionHeaderFilter"/>
+				<mule:expression-filter expression="#[ flowVars.jweHeader.containsKey('cty') &amp;&amp; flowVars.jweHeader.cty == 'JWT' ]" name="correctContentTypeHeaderFilter"/>
+				<mule:expression-filter expression="#[ flowVars.jweHeader.containsKey('zip') ? flowVars.jweHeader.zip == 'def' : true ]" name="correctZipHeaderFilter"/>
+			</mule:and-filter>
+		</mule:message-filter>
+        
+        <scripting:transformer>
+			<scripting:script engine="Groovy"><![CDATA[
+			import org.apache.commons.codec.binary.Base64;
+			import javax.crypto.Cipher;
+			import java.security.*;
+			import java.security.spec.*;
+			import javax.crypto.spec.GCMParameterSpec;
+			import javax.crypto.spec.SecretKeySpec;
+			import java.nio.ByteBuffer;
+			import java.nio.charset.StandardCharsets;
+			import java.util.zip.Inflater;
+			
+			int tagLengthBytes = 16;
+			String algorithm = flowVars.supportedEncryptionAlgorithms[ flowVars.jweHeader.enc ];
+			
+			try{
+				byte[] aad = flowVars.jweHeaderB64.getBytes( StandardCharsets.US_ASCII );
+				byte[] aesKeyBytes = Base64.decodeBase64( '{{encryptionKey}}' );
+				byte[] iv = Base64.decodeBase64( flowVars.jweIVB64 );
+				byte[] cipherText = Base64.decodeBase64( flowVars.jweEncryptedContentB64 );
+				byte[] tag = Base64.decodeBase64( flowVars.jweAuthTagB64 );
+				
+				// In Java, Authentication Tag is part of the ciphertext
+				byte[] cipherTextAndTag = new byte[ cipherText.length + tagLengthBytes ];
+				ByteBuffer bb = ByteBuffer.wrap( cipherTextAndTag );
+				bb.put( cipherText ).put( tag );
+				
+				// key
+				SecretKeySpec keySpec = new SecretKeySpec(aesKeyBytes, "AES");
+				
+				// cipher initialization
+				GCMParameterSpec gcmParams = new GCMParameterSpec( tagLengthBytes * Byte.SIZE, iv );
+				Cipher aesGcm = Cipher.getInstance( algorithm );
+				aesGcm.init( Cipher.DECRYPT_MODE, keySpec, gcmParams );
+				aesGcm.updateAAD( aad );
+				
+				// decryption
+				byte[] recoveredText = aesGcm.doFinal( cipherTextAndTag );
+ 				
+			   	payload = new String( recoveredText );
+			    
+				
+			}catch(Exception e) {
+				org.apache.logging.log4j.LogManager.getLogger(org.mule.api.processor.LoggerMessageProcessor.class).info("Policy {{ policyId }}: JWE decryption failed: " + e);
+				payload = null;
+			}
+			]]></scripting:script>
+		</scripting:transformer>
+        
+		<mule:logger message="Policy {{ policyId }} Decrypted payload: #[payload]" level="INFO" />
+        
+        <!--    Stop processing if decryption failed   --> 
+        <mule:message-filter onUnaccepted="policyViolation">
+			<mule:expression-filter expression="#[ payload != null ]" />
+		</mule:message-filter>
+        
+        
+        
+        
+        
+        
+ <!--    JSON Web Signature PROCESSING   --> 
+ 
+		<!--    Parse JWS access token   -->      
+        <mule:set-payload value="#[payload.split('\\.')]" />
+		
+ 		<!-- Decrypted payload must be of valid JWS compact serialization format (header.payload.signature) -->	
+		<mule:message-filter onUnaccepted="authFormatViolation">
+			<mule:expression-filter expression="#[payload.length == 3]"/>
+		</mule:message-filter>
+        
+		<!--    Save raw JWS segments (header.payload.signature)   --> 
+		<mule:set-variable variableName="jwsHeaderBase64Url" value="#[payload[0]]" />
+		<mule:set-variable variableName="jwsPayloadBase64Url" value="#[payload[1]]" />
+		<mule:set-variable variableName="jwsSignatureBase64Url" value="#[payload[2]]" />
+		
+		<!--    Validate Base64 URL-safe encoding of JWS header, payload and signature   --> 	
+		<mule:logger message="Policy {{ policyId }} validating base64url encoding of JWS parts" level="INFO" />	
+		<mule:message-filter onUnaccepted="authFormatViolation">
+			<mule:and-filter>
+				<mule:expression-filter expression="#[ org.apache.commons.codec.binary.Base64.isBase64(flowVars.jwsHeaderBase64Url) ]" />
+				<mule:expression-filter expression="#[ org.apache.commons.codec.binary.Base64.isBase64(flowVars.jwsPayloadBase64Url) ]" />
+				<mule:expression-filter expression="#[ org.apache.commons.codec.binary.Base64.isBase64(flowVars.jwsSignatureBase64Url) ]" />
+			</mule:and-filter>
+		</mule:message-filter>
+    	 
+    	 
+    	
+<!-- Load JWK set from external location -->
+		<mule:logger message="Policy {{ policyId }} loading JWKS" level="INFO" />	
+		<mule:set-variable value="#[new ArrayList()]" variableName="validRSAPublicKeys"></mule:set-variable>
+		
+		<mule:enricher source="#[payload]" target="#[flowVars.jwks]">
+			<ee:cache cachingStrategy-ref="jwksCachingStrategy">
+				<mule:processor-chain>
+					<mule:logger message="Making actual request...]" level="INFO" />
+				  	<http:request config-ref="HTTP_AS" path="#['/' + java.nio.file.Paths.get( new java.net.URL('{{jwks}}').getPath() ).getFileName()]" method="GET" />
+		    		<mule:object-to-string-transformer />
+		    		<json:json-to-object-transformer returnClass="java.util.HashMap" />
+				</mule:processor-chain>
+			</ee:cache>
+		</mule:enricher>
+		
+     	<mule:logger message="Policy {{ policyId }} JWKs: #[flowVars.jwks]" level="INFO" />	
+		<mule:message-filter onUnaccepted="keySetViolation">
+			<mule:expression-filter expression="#[flowVars.jwks != null]" />
+		</mule:message-filter>
+		
+		<!-- Construct RSA Public Keys from JWKs -->
+   		<scripting:transformer>
+			<scripting:script engine="Groovy"><![CDATA[
+			import org.apache.commons.codec.binary.Base64;
+			import javax.crypto.Cipher;
+			import java.security.*;
+			import java.security.spec.*;
+			
+			validKeys = new ArrayList();
+			
+			for(jwk in flowVars.jwks.keys) {
+				try {	
+					// skip key if not valid
+					if(!( jwk.e != null  &&  jwk.n != null  &&
+						jwk.kty != null  &&  jwk.kty == "RSA"  &&
+						jwk.containsKey('use') ? jwk.use == 'sig' : true)
+					 ){
+						continue;						
+					}
+					
+					org.apache.logging.log4j.LogManager.getLogger(org.mule.api.processor.LoggerMessageProcessor.class).info("jwk: " + jwk);		
+					BigInteger modulus = new BigInteger(1, Base64.decodeBase64( jwk.n )); 
+	        		BigInteger exponent = new BigInteger(1, Base64.decodeBase64( jwk.e )); 
+					RSAPublicKeySpec publicKeySpec = new RSAPublicKeySpec(modulus, exponent); 
+	        		KeyFactory keyFactory = KeyFactory.getInstance("RSA"); 	
+	        			
+					validKeys.add( keyFactory.generatePublic(publicKeySpec) );	
+					
+				} catch (Exception e){
+					org.apache.logging.log4j.LogManager.getLogger(org.mule.api.processor.LoggerMessageProcessor.class).info("Policy {{ policyId }}: JWK -> Public key could not be created from JWK. Skipped.: " + e);				
+				}
+			}
+			
+			payload = validKeys;			
+			]]></scripting:script>
+		</scripting:transformer>
+		<mule:set-variable value="#[payload]" variableName="validRSAPublicKeys"></mule:set-variable>
+		
+		<mule:message-filter onUnaccepted="keySetViolation">
+			<mule:expression-filter expression="#[!flowVars.validRSAPublicKeys.isEmpty()]" />
+		</mule:message-filter>
+		
+
+		<!--  Decode JWS Header   --> 
+		<mule:set-payload value="#[flowVars.jwsHeaderBase64Url]"></mule:set-payload>
+		<mule:base64-decoder-transformer/>
+		<mule:message-filter onUnaccepted="authFormatViolation">
+			<json:is-json-filter/>
+		</mule:message-filter>
+		<json:json-to-object-transformer returnClass="java.util.HashMap" />
+		<mule:set-variable variableName="jwsHeader" value="#[payload]" />
+		
+		<mule:logger message="JWS Header: #[flowVars.jwsHeader]" level="INFO" />	
+		
+<!--    Validate header alg claim    --> 	
+		<mule:set-variable variableName="supportedRSAAlgorithms" value="#[
+			[
+				'RS256': 'SHA256withRSA',
+				'RS384': 'SHA384withRSA',
+				'RS512': 'SHA512withRSA'	
+			]
+		]"/>
+		
+		<!--  Validate that we support the algorithm and that it matches the configured one  --> 
+		<mule:logger message="Policy {{ policyId }} testing JWS header algorithm correctness" level="INFO" />	
+		<mule:message-filter onUnaccepted="policyViolation">
+			<mule:and-filter>
+				<mule:expression-filter expression="#[ flowVars.supportedRSAAlgorithms.containsKey( flowVars.jwsHeader.alg ) ]"/>
+				<mule:expression-filter expression="#[ flowVars.jwsHeader.alg == '{{ signatureAlg }}' ]"/>
+			</mule:and-filter>
+		</mule:message-filter>
+		
+		
+<!--    Perform signature verification    -->		
+		
+		<scripting:transformer>
+			<scripting:script engine="Groovy"><![CDATA[
+			import org.apache.commons.codec.binary.Base64;
+			import javax.crypto.Cipher;
+			import java.security.*;
+			import java.security.spec.*;
+			
+			String algorithm = flowVars.supportedRSAAlgorithms[ flowVars.jwsHeader.alg ];
+			
+			boolean verified = false;
+			
+			for( publicKey in flowVars.validRSAPublicKeys) {
+				try {
+				
+					Signature signature = Signature.getInstance(algorithm);				
+					signature.initVerify(publicKey);				
+					signature.update( (flowVars.jwsHeaderBase64Url + '.' + flowVars.jwsPayloadBase64Url).getBytes("UTF-8") );											
+					
+					verified = signature.verify(Base64.decodeBase64(flowVars.jwsSignatureBase64Url.getBytes("UTF-8")));		
+					if(verified) { break; }			
+				} catch (Exception e){
+					org.apache.logging.log4j.LogManager.getLogger(org.mule.api.processor.LoggerMessageProcessor.class).info("Policy {{ policyId }}: JWS signature could not be verified: " + e);				
+				}
+			}
+			payload = verified;
+			]]></scripting:script>
+		</scripting:transformer>
+		
+		<mule:set-variable value="#[payload]" variableName="isValidSignature"/>		
+		<mule:logger message="Policy {{ policyId }} Signature verification status: #[flowVars.isValidSignature]" level="INFO" />	
+		
+		
+		<!--  Decode JWS Payload   --> 
+		<mule:set-payload value="#[flowVars.jwsPayloadBase64Url]"></mule:set-payload>
+		<mule:base64-decoder-transformer/>
+		<mule:message-filter onUnaccepted="authFormatViolation">
+			<json:is-json-filter/>
+		</mule:message-filter>
+		<json:json-to-object-transformer returnClass="java.util.HashMap" />
+		<mule:set-variable value="#[payload]" variableName="claims" />
+		
+		<!--    Verify claims   -->	
+		<mule:message-filter  onUnaccepted="policyViolation">
+		  	<mule:and-filter>
+				<mule:expression-filter expression="#[(flowVars.claims.nbf == null) ? true : flowVars.claims.nbf &lt; java.time.Instant.now().getEpochSecond()]" name="NotBeforeClaimFilter"/>
+				<mule:expression-filter expression="#[flowVars.claims.exp != null &amp;&amp; flowVars.claims.exp &gt; java.time.Instant.now().getEpochSecond()]" name="ExpirationClaimFilter"/>		
+				<mule:expression-filter expression="#[flowVars.claims.iss != null &amp;&amp; flowVars.claims.iss == '{{ issuer }}']" name="IssuerFilter"/>
+				<mule:expression-filter expression="#[flowVars.isValidSignature]" name="SignatureFilter"/>		
+		 	</mule:and-filter>	
+		</mule:message-filter>
+		
+		<mule:set-payload value="#[flowVars.inputPayload]" />
+		<mule:remove-variable variableName="jw*" />
+		<mule:remove-variable variableName="supported*" />
+		<mule:remove-variable variableName="valid*" />
+		<mule:remove-variable variableName="is*" />
+	    <mule:logger message="#[message]" level="INFO" />	    
+        
+    </before>
+
+</policy>

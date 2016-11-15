@@ -1,0 +1,46 @@
+# Name used to describe the policy in API Platform
+name: OAuth 2.0 JWE access token enforcement policy using third party provider
+
+# A more detailed description of the policy
+description: Validates signed and encrypted JWT access token and validates claims - iss, exp, nbf.
+
+category: Security
+standalone: true
+
+providedCharacteristics: [JWT validation, OAuth 2.0 protected]
+requiredCharacteristics: []
+requiresConnectivity: true
+
+configuration:  
+
+  - propertyName: issuer
+    name: Issuer
+    description: Issuer of signed and encrypted JWT.
+    type: string
+    optional: false
+    
+  - propertyName: jwks
+    name: JWKs URL
+    description: URL to the JWK Set containing public keys to validate the signature against.
+    type: string
+    
+  - propertyName: signatureAlg
+    name: Signing algorithm
+    description: Algorithm used for signature validation. Values are RS256, RS384, RS512.
+    type: string
+    defaultValue: RS256
+    
+  - propertyName: encryptionAlg
+    name: Encryption algorithm
+    description: Algorithm used for content encryption. Possible values are A128GCM, A256GCM.
+    type: string
+    defaultValue: A128GCM
+    
+  - propertyName: encryptionKey
+    name: Encryption key
+    description: Base64URL encoded symmetric AES key. Paste here the 'k' value of AES JWK.
+    type: string
+    sensitive: true
+    
+    
+    
