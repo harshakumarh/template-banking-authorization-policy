@@ -1,0 +1,19 @@
+{
+  "name": "%ARTIFACT_ID%",
+  "minMuleVersion": "4.1.0",
+  "requiredProduct": "MULE_EE",
+  "classLoaderModelLoaderDescriptor": {
+    "id": "mule",
+    "attributes": {}
+  },
+  "bundleDescriptorLoader": {
+    "id": "mule",
+    "attributes": {
+      "groupId": "%GROUP_ID%",
+      "artifactId": "%ARTIFACT_ID%",
+      "version": "%VERSION%",
+      "classifier": "mule-policy",
+      "type": "jar"
+    }
+  }
+}
