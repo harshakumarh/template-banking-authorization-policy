@@ -25,45 +25,32 @@
                                       encryptionKey="{{{encryptionKey}}}"/>
 
     <http-policy:proxy name="{{{policyId}}}-template-banking-authorization-policy">
-        <http-policy:source>
+        <http-policy:source propagateMessageTransformations="true">
             <try>
+                <logger level="INFO" doc:name="Logger" doc:id="ec7f8185-36e1-497f-92f3-74e14df7d969" message="propagateMessageTransformations=true"/>
 
-                <ee:transform doc:name="Save Authorization header and payload"
-                              doc:id="8ff1dc02-c451-4235-b32b-d8ff601f9a97">
-                    <ee:message>
-                        <ee:set-payload><![CDATA[%dw 2.0
-output application/java
----
-attributes.headers.authorization]]></ee:set-payload>
-                    </ee:message>
-                    <ee:variables>
-                        <ee:set-variable variableName="inputPayload"><![CDATA[payload]]></ee:set-variable>
-                    </ee:variables>
-                </ee:transform>
                 <validation:is-not-null doc:name="Exists Authorization header"
                                         doc:id="e2f66769-f8aa-4baa-8104-9854e9b24723" config-ref="Validation_Config"
-                                        value="#[payload]" message="Authorization header is null"/>
+                                        value="#[attributes.headers.authorization]" message="Authorization header is null"/>
                 <validation:is-true doc:name="Starts with Bearer" doc:id="db3b545d-a644-43b0-bb65-1b1d2bf85ba5"
                                     config-ref="Validation_Config"
                                     message="Authorization header doesn't start with 'Bearer '"
-                                    expression='#[payload startsWith("Bearer ")]'/>
+                                    expression='#[attributes.headers.authorization startsWith("Bearer ")]'/>
                 <banking-custom-policy-ext:validate-jwt doc:name="Validate jwt"
                                                         doc:id="154eff6c-3aae-404b-8348-88844b9f3b80"
                                                         config-ref="Banking_custom_policy_ext_Config"
-                                                        token="#[payload[7 to sizeOf(payload) -1]]"/>
-                <ee:transform doc:name="Set variable claims and payload" doc:id="80fe1e31-8dc2-49a2-bd23-773da1547cd9">
-                    <ee:message>
-                        <ee:set-payload><![CDATA[vars.inputPayload]]></ee:set-payload>
-                    </ee:message>
-                    <ee:variables>
-                        <ee:set-variable variableName="claims"><![CDATA[%dw 2.0
-output application/json
----
-payload]]></ee:set-variable>
-                    </ee:variables>
-                </ee:transform>
-                <remove-variable doc:name="Remove Variable inputPayload" doc:id="30c4a55f-4d65-403e-8777-1919124170cc"
-                                 variableName="inputPayload"/>
+                                                        token="#[attributes.headers.authorization[7 to sizeOf(attributes.headers.authorization) -1]]" target="claims"/>
+                <http-transform:add-headers outputType="request">
+                    <http-transform:headers>#[
+                        {
+                        'ssn': vars.claims.ssn
+                        }
+                        ]</http-transform:headers>
+                </http-transform:add-headers>
+                <logger level="INFO" doc:name="Logger" doc:id="ec7f8185-36e1-497f-92f3-74e14df7d970" message="vars.validationRetval=#[output application/json --- vars.validationRetval]"/>
+                <logger level="INFO" doc:name="Logger" doc:id="ec7f8185-36e1-497f-92f3-74e14df7d971" message="vars.claims=#[output application/json --- vars.claims]"/>
+                <logger level="INFO" doc:name="Logger" doc:id="ec7f8185-36e1-497f-92f3-74e14df7d972" message="payload=#[output application/json --- payload]"/>
+                <logger level="INFO" doc:name="Logger" doc:id="ec7f8185-36e1-497f-92f3-74e14df7d973" />
 
                 <http-policy:execute-next/>
 

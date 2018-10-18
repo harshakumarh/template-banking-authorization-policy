@@ -1,7 +1,8 @@
 id: template-banking-authorization-policy
 name: OAuth 2.0 JWE access token enforcement policy using third party provider
 supportedPoliciesVersions: '>=v1'
-description: | Validates signed and encrypted JWT access token and validates claims - iss, exp, nbf.
+description: |
+    Validates signed and encrypted JWT access token and validates claims - iss, exp, nbf.
 
 category: Security
 type: custom
