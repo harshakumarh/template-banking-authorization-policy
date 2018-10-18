@@ -27,8 +27,6 @@
     <http-policy:proxy name="{{{policyId}}}-template-banking-authorization-policy">
         <http-policy:source propagateMessageTransformations="true">
             <try>
-                <logger level="INFO" doc:name="Logger" doc:id="ec7f8185-36e1-497f-92f3-74e14df7d969" message="propagateMessageTransformations=true"/>
-
                 <validation:is-not-null doc:name="Exists Authorization header"
                                         doc:id="e2f66769-f8aa-4baa-8104-9854e9b24723" config-ref="Validation_Config"
                                         value="#[attributes.headers.authorization]" message="Authorization header is null"/>
@@ -47,10 +45,6 @@
                         }
                         ]</http-transform:headers>
                 </http-transform:add-headers>
-                <logger level="INFO" doc:name="Logger" doc:id="ec7f8185-36e1-497f-92f3-74e14df7d970" message="vars.validationRetval=#[output application/json --- vars.validationRetval]"/>
-                <logger level="INFO" doc:name="Logger" doc:id="ec7f8185-36e1-497f-92f3-74e14df7d971" message="vars.claims=#[output application/json --- vars.claims]"/>
-                <logger level="INFO" doc:name="Logger" doc:id="ec7f8185-36e1-497f-92f3-74e14df7d972" message="payload=#[output application/json --- payload]"/>
-                <logger level="INFO" doc:name="Logger" doc:id="ec7f8185-36e1-497f-92f3-74e14df7d973" />
 
                 <http-policy:execute-next/>
 
