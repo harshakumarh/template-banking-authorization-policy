@@ -1,7 +1,8 @@
 ## Oauth 2.0 JWE access token enforcement policy extension
 
 This policy extension decrypts and validates encrypted JWT access token. The extension decrypts the JWE using shared AES key, then validates signature by using provided URL with RSA JWK key set and finally verifies JWT claims: iss, exp, nbf. Claims are then returned as a java Map object to the policy , which uses this extension.
-To decrypt and validate JWT org.bitbucket.b_c::jose4j library is used
+If decryption or verification fails, BANKING-CUSTOM-POLICY-EXT:INVALID_JWT error will be thrown.
+To decrypt and validate JWT org.bitbucket.b_c::jose4j library is used.
 
 ###Supported encryption algorithms:
  + AES_128/GCM/NoPadding  (A128GCM in JWT terminology)
