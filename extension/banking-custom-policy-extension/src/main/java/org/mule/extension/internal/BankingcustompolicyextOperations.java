@@ -33,6 +33,12 @@ public class BankingcustompolicyextOperations {
 
     private final Logger LOGGER = LoggerFactory.getLogger(BankingcustompolicyextOperations.class);
 
+    /**
+     *
+     * @param configuration
+     * @param token
+     * @return Map of jwt claims
+     */
     @Summary("Validates JWT and returns claims extracted from it.")
     @Throws(BankingcustompolicyextErrorTypeProvider.class)
     @OutputResolver(output = BankingcustompolicyextMetadataResolver.class)
