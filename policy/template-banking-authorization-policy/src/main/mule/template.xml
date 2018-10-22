@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:banking-custom-policy-ext="http://www.mulesoft.org/schema/mule/banking-custom-policy-ext"
+      xmlns:validation="http://www.mulesoft.org/schema/mule/validation"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:http-policy="http://www.mulesoft.org/schema/mule/http-policy"
+      xmlns:http-transform="http://www.mulesoft.org/schema/mule/http-policy-transform"
+      xmlns="http://www.mulesoft.org/schema/mule/core"
+      xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+               http://www.mulesoft.org/schema/mule/http-policy http://www.mulesoft.org/schema/mule/http-policy/current/mule-http-policy.xsd
+               http://www.mulesoft.org/schema/mule/http-policy-transform http://www.mulesoft.org/schema/mule/http-policy-transform/current/mule-http-policy-transform.xsd
+
+               http://www.mulesoft.org/schema/mule/validation http://www.mulesoft.org/schema/mule/validation/current/mule-validation.xsd
+               http://www.mulesoft.org/schema/mule/banking-custom-policy-ext http://www.mulesoft.org/schema/mule/banking-custom-policy-ext/current/mule-banking-custom-policy-ext.xsd">
+
+    <validation:config name="Validation_Config" doc:name="Validation Config"
+                       doc:id="4bc8cd93-75ea-4c44-b3f6-af0ff694f861"/>
+    <banking-custom-policy-ext:config name="Banking_custom_policy_ext_Config"
+                                      doc:name="Banking-custom-policy-ext Config"
+                                      doc:id="be04b102-41ed-46e4-9935-0b27cd77d57d"
+                                      issuer="{{{issuer}}}"
+                                      jwksUrl="{{{jwks}}}"
+                                      signingAlgorithm="{{{signatureAlg}}}"
+                                      encryptionKey="{{{encryptionKey}}}"/>
+
+    <http-policy:proxy name="{{{policyId}}}-template-banking-authorization-policy">
+        <http-policy:source propagateMessageTransformations="true">
+            <try>
+                <validation:is-not-null doc:name="Exists Authorization header"
+                                        doc:id="e2f66769-f8aa-4baa-8104-9854e9b24723" config-ref="Validation_Config"
+                                        value="#[attributes.headers.authorization]" message="Authorization header is null"/>
+                <validation:is-true doc:name="Starts with Bearer" doc:id="db3b545d-a644-43b0-bb65-1b1d2bf85ba5"
+                                    config-ref="Validation_Config"
+                                    message="Authorization header doesn't start with 'Bearer '"
+                                    expression='#[attributes.headers.authorization startsWith("Bearer ")]'/>
+                <banking-custom-policy-ext:validate-jwt doc:name="Validate jwt"
+                                                        doc:id="154eff6c-3aae-404b-8348-88844b9f3b80"
+                                                        config-ref="Banking_custom_policy_ext_Config"
+                                                        token="#[attributes.headers.authorization[7 to sizeOf(attributes.headers.authorization) -1]]"
+                                                        target="claims"/>
+                <http-transform:add-headers outputType="request">
+                    <http-transform:headers>#[
+                        {
+                        'ssn': vars.claims.ssn
+                        }
+                        ]
+                    </http-transform:headers>
+                </http-transform:add-headers>
+
+                <http-policy:execute-next/>
+
+                <error-handler>
+                    <on-error-propagate enableNotifications="true" logException="true" doc:name="On Error Propagate"
+                                        doc:id="3843b09b-7a71-4e5d-84d1-5a6538c43041"
+                                        type="VALIDATION:INVALID_BOOLEAN, VALIDATION:NULL">
+
+                        <http-transform:set-response statusCode="400">
+                            <http-transform:body>#[
+                                output application/json
+                                ---
+                                {"error": " $(error.description)"}
+                                ]
+                            </http-transform:body>
+                        </http-transform:set-response>
+                    </on-error-propagate>
+                    <on-error-propagate enableNotifications="true" logException="true" doc:name="On Error Propagate"
+                                        doc:id="3843b09b-7a71-4e5d-84d1-5a6538c43041"
+                                        type="BANKING-CUSTOM-POLICY-EXT:INVALID_JWT">
+
+                        <http-transform:set-response statusCode="401">
+                            <http-transform:body>#[
+                                output application/json
+                                ---
+                                {"error": " $(error.description)"}
+                                ]
+                            </http-transform:body>
+                        </http-transform:set-response>
+                    </on-error-propagate>
+                </error-handler>
+            </try>
+        </http-policy:source>
+    </http-policy:proxy>
+
+</mule>
